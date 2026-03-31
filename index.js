@@ -9,7 +9,6 @@ const { google } = require('googleapis');
 const SHEET_ID       = process.env.GOOGLE_SHEET_ID;
 const SHEET_TAB      = 'Listing Tracker';
 const APIFY_TOKEN    = process.env.APIFY_TOKEN;
-const ZAPIER_WEBHOOK = process.env.ZAPIER_WEBHOOK;
 
 // 0-based column indices  →  sheet letter
 const COL = {
@@ -27,8 +26,9 @@ const COL = {
 // ZIP → Zillow sold-homes search URL (must include full searchQueryState)
 const ZIP_SOLD_URLS = {
   '85718': 'https://www.zillow.com/tucson-az-85718/sold/?searchQueryState=%7B%22pagination%22%3A%7B%7D%2C%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22west%22%3A-111.14097846728515%2C%22east%22%3A-110.69534553271484%2C%22south%22%3A32.20951945556616%2C%22north%22%3A32.4717400226085%7D%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A95056%2C%22regionType%22%3A7%7D%5D%2C%22filterState%22%3A%7B%22sort%22%3A%7B%22value%22%3A%22globalrelevanceex%22%7D%2C%22rs%22%3A%7B%22value%22%3Atrue%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A12%2C%22usersSearchTerm%22%3A%2285718%22%7D',
-  '85755': 'https://www.zillow.com/tucson-az-85755/sold/?searchQueryState=%7B%22pagination%22%3A%7B%7D%2C%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22west%22%3A-111.14097846728515%2C%22east%22%3A-110.69534553271484%2C%22south%22%3A32.20951945556616%2C%22north%22%3A32.4717400226085%7D%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A95056%2C%22regionType%22%3A7%7D%5D%2C%22filterState%22%3A%7B%22sort%22%3A%7B%22value%22%3A%22globalrelevanceex%22%7D%2C%22rs%22%3A%7B%22value%22%3Atrue%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A12%2C%22usersSearchTerm%22%3A%2285755%22%7D',
+  '85755': 'https://www.zillow.com/oro-valley-az-85755/sold/?searchQueryState=%7B%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22north%22%3A32.55265469222126%2C%22south%22%3A32.421757054341654%2C%22east%22%3A-110.87567826635743%2C%22west%22%3A-111.09849473364258%7D%2C%22filterState%22%3A%7B%22sort%22%3A%7B%22value%22%3A%22globalrelevanceex%22%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%2C%22rs%22%3A%7B%22value%22%3Atrue%7D%2C%22price%22%3A%7B%22max%22%3Anull%7D%2C%22mp%22%3A%7B%22min%22%3A5500%2C%22max%22%3Anull%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A13%2C%22usersSearchTerm%22%3A%22Oro%20Valley%20AZ%2085755%22%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A95090%2C%22regionType%22%3A7%7D%5D%2C%22pagination%22%3A%7B%7D%7D',
   '85742': 'https://www.zillow.com/oro-valley-az-85742/sold/?searchQueryState=%7B%22pagination%22%3A%7B%7D%2C%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22west%22%3A-111.14097846728515%2C%22east%22%3A-110.69534553271484%2C%22south%22%3A32.20951945556616%2C%22north%22%3A32.4717400226085%7D%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A95056%2C%22regionType%22%3A7%7D%5D%2C%22filterState%22%3A%7B%22sort%22%3A%7B%22value%22%3A%22globalrelevanceex%22%7D%2C%22rs%22%3A%7B%22value%22%3Atrue%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A12%2C%22usersSearchTerm%22%3A%2285742%22%7D',
+  '85710': 'https://www.zillow.com/tucson-az-85710/sold/?searchQueryState=%7B%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22north%22%3A32.24822205296588%2C%22south%22%3A32.18257624907564%2C%22east%22%3A-110.76816588317871%2C%22west%22%3A-110.87957411682129%7D%2C%22filterState%22%3A%7B%22sort%22%3A%7B%22value%22%3A%22globalrelevanceex%22%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%2C%22rs%22%3A%7B%22value%22%3Atrue%7D%2C%22price%22%3A%7B%22max%22%3Anull%7D%2C%22mp%22%3A%7B%22min%22%3A5500%2C%22max%22%3Anull%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A14%2C%22usersSearchTerm%22%3A%2285710%22%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A95048%2C%22regionType%22%3A7%7D%5D%7D',
 };
 
 // ─── Google Sheets auth ───────────────────────────────────────────────────────
@@ -298,17 +298,6 @@ async function updateSheetRow(sheets, rowIndex, data) {
   });
 }
 
-// ─── Zapier notification ──────────────────────────────────────────────────────
-
-async function sendToZapier(payload) {
-  if (!ZAPIER_WEBHOOK) { console.warn('  ZAPIER_WEBHOOK not set'); return; }
-  const res = await fetch(ZAPIER_WEBHOOK, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) console.warn(`  Zapier returned ${res.status}`);
-}
 
 // ─── Main job ─────────────────────────────────────────────────────────────────
 
@@ -361,12 +350,6 @@ async function runMonitor() {
       console.error(`  Sheet write error: ${err.message}`);
     }
 
-    try {
-      await sendToZapier({ address, rowIndex, ...rowData, updatedAt: new Date().toISOString() });
-      console.log('  Zapier notified');
-    } catch (err) {
-      console.error(`  Zapier error: ${err.message}`);
-    }
   }
 
   console.log(`\n[${new Date().toISOString()}] Monitor run complete`);
