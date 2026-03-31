@@ -1,0 +1,17 @@
+{
+  "name": "property-monitor",
+  "version": "1.0.0",
+  "description": "Daily property listing monitor with Zillow scraping and Google Sheets integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
