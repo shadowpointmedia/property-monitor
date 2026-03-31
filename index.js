@@ -11,16 +11,19 @@ const SHEET_TAB      = 'Listing Tracker';
 const APIFY_TOKEN    = process.env.APIFY_TOKEN;
 
 // 0-based column indices  →  sheet letter
+// 0-based column indices matching "Listing Tracker" row 2 headers
 const COL = {
-  address:      0,  // A
-  listPrice:    4,  // E
-  zillowUrl:    5,  // F
-  listDate:     6,  // G
-  soldPrice:    7,  // H
-  soldDate:     8,  // I
-  daysOnMarket: 9,  // J
-  zpid:         10, // K  ← persisted; empty on first run, populated after first match
-  marketAvgDom: 11, // L
+  address:      0,  // A  – Address
+  listPrice:    4,  // E  – List Price ($)
+  zillowUrl:    5,  // F  – Zillow / MLS URL
+  listDate:     6,  // G  – List Date
+  soldPrice:    7,  // H  – Sold Price ($)
+  // I (index 8) is a duplicate "List Date" header — skipped
+  soldDate:     9,  // J  – Sold Date
+  daysOnMarket: 10, // K  – Days on Market
+  marketAvgDom: 11, // L  – Market Avg DOM
+  // M/N/O (12-14) are formula columns — not written by this script
+  zpid:         15, // P  – ZPID cache (persisted; empty on first run)
 };
 
 // ZIP → Zillow sold-homes search URL (must include full searchQueryState)
@@ -268,7 +271,7 @@ async function fetchMarketAvgDom(zip) {
 async function readAddresses(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${SHEET_TAB}'!A:K`,  // read through K to include stored ZPIDs
+    range: `'${SHEET_TAB}'!A:P`,  // read through P to include stored ZPIDs (col 15)
   });
   const rows = res.data.values || [];
   const result = [];
