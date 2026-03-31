@@ -22,8 +22,8 @@ const COL = {
   soldDate:     9,  // J  – Sold Date
   daysOnMarket: 10, // K  – Days on Market
   marketAvgDom: 11, // L  – Market Avg DOM
-  // M/N/O (12-14) are formula columns — not written by this script
-  zpid:         15, // P  – ZPID cache (persisted; empty on first run)
+  // M/N (12-13) are formula columns — not written by this script
+  zpid:         14, // O  – ZPID cache (persisted; empty on first run)
 };
 
 // ZIP → Zillow sold-homes search URL (must include full searchQueryState)
@@ -296,7 +296,7 @@ async function fetchMarketAvgDom(zip) {
 async function readAddresses(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${SHEET_TAB}'!A:P`,  // read through P to include stored ZPIDs (col 15)
+    range: `'${SHEET_TAB}'!A:O`,  // read through O to include stored ZPIDs (col 14)
   });
   const rows = res.data.values || [];
   const result = [];
