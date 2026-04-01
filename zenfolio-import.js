@@ -13,8 +13,7 @@
  *   node --env-file=.env zenfolio-import.js
  */
 
-const fetch  = require('node-fetch');
-const crypto = require('crypto');
+const fetch = require('node-fetch');
 
 const ZENFOLIO_API   = 'https://api.zenfolio.com/api/1.8/zfapi.asmx';
 const ZENFOLIO_LOGIN = 'shadowpointmedia';
@@ -23,9 +22,9 @@ const ZENFOLIO_LOGIN = 'shadowpointmedia';
 
 let _reqId = 1;
 
-async function callApi(method, params, token) {
+async function callApi(method, params, sessionCookie) {
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['X-Zenfolio-Token'] = token;
+  if (sessionCookie) headers['Cookie'] = sessionCookie;
 
   const res = await fetch(ZENFOLIO_API, {
     method:  'POST',
@@ -41,36 +40,6 @@ async function callApi(method, params, token) {
   const json = await res.json();
   if (json.error) throw new Error(`Zenfolio API error in ${method}: ${JSON.stringify(json.error)}`);
   return json.result;
-}
-
-// ─── Authentication ────────────────────────────────────────────────────────────
-
-async function authenticate() {
-  const password = process.env.ZENFOLIO_PASSWORD;
-  if (!password) throw new Error('ZENFOLIO_PASSWORD env var is not set');
-
-  console.error('Authenticating with Zenfolio...');
-  const challenge = await callApi('GetChallenge', [ZENFOLIO_LOGIN]);
-
-  const saltBytes      = Buffer.from(challenge.PasswordSalt);
-  const challengeBytes = Buffer.from(challenge.Challenge);
-  const passwordBytes  = Buffer.from(password, 'utf8');
-
-  const innerHash = crypto.createHash('sha256')
-    .update(Buffer.concat([saltBytes, passwordBytes]))
-    .digest();
-
-  const passwordHash = Array.from(
-    crypto.createHash('sha256')
-      .update(Buffer.concat([challengeBytes, innerHash]))
-      .digest()
-  );
-
-  const token = await callApi('Authenticate', [ZENFOLIO_LOGIN, passwordHash]);
-  if (!token) throw new Error('Authenticate returned empty token');
-
-  console.error('Authenticated. Token received.');
-  return token;
 }
 
 // ─── Date parsing ─────────────────────────────────────────────────────────────
@@ -91,14 +60,13 @@ function nodeDate(node) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const token = await authenticate();
+  const sessionCookie = process.env.ZENFOLIO_SESSION_COOKIE;
+  if (!sessionCookie) throw new Error('ZENFOLIO_SESSION_COOKIE env var is not set (format: cookiename=cookievalue)');
 
-  // Load the top-level group hierarchy with auth so password-protected groups are visible.
   console.error('Loading group hierarchy...');
-  const root = await callApi('LoadGroupHierarchy', [ZENFOLIO_LOGIN], token);
+  const root = await callApi('LoadGroupHierarchy', [ZENFOLIO_LOGIN], sessionCookie);
   console.error('Group hierarchy loaded.');
 
-  // Find the REALTORS group (case-insensitive).
   const realtorsGroup = (root.Elements || []).find(
     n => n.$type === 'Group' && (n.Title || '').trim().toUpperCase() === 'REALTORS'
   );
@@ -113,11 +81,9 @@ async function main() {
     if (realtorNode.$type !== 'Group') continue;
     const realtorName = (realtorNode.Title || '').trim();
 
-    // LoadGroupHierarchy only returns 2 levels deep; load each realtor group
-    // individually with the auth token to get its address subfolders.
     let loaded;
     try {
-      loaded = await callApi('LoadGroup', [realtorNode.Id, 'Level1'], token);
+      loaded = await callApi('LoadGroup', [realtorNode.Id, 'Level1'], sessionCookie);
     } catch (err) {
       console.error(`  Skipping "${realtorName}": ${err.message}`);
       continue;
@@ -131,9 +97,7 @@ async function main() {
 
     console.error(`  "${realtorName}": ${addressNodes.length} address folder(s)`);
     for (const addressNode of addressNodes) {
-      const address   = (addressNode.Title || '').trim();
-      const shootDate = nodeDate(addressNode);
-      records.push({ address, shootDate, realtorName });
+      records.push({ address: (addressNode.Title || '').trim(), shootDate: nodeDate(addressNode), realtorName });
     }
   }
 
