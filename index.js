@@ -77,7 +77,7 @@ function getSheetsClient() {
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 const APIFY_POLL_MS = 6_000;
-const APIFY_MAX_WAIT_MS = 180_000;
+const APIFY_MAX_WAIT_MS = 300_000; // 5 minutes per actor run
 
 async function runApifyActor(actorId, input) {
   const safeId = actorId.replace('/', '~');
@@ -455,71 +455,75 @@ async function runMonitor() {
 
   for (const { address, zpid: storedZpid, rowIndex, storedSoldDate, rowValues } of addressRows) {
     console.log(`\nProcessing [row ${rowIndex}]: ${address}${storedZpid ? ` (ZPID ${storedZpid})` : ' (no ZPID yet)'}`);
-    const zip = extractZip(address);
-
-    // ── Fast-path graduation: already known sold > 90 days (skip scraping) ──
-    const storedDaysAgo = soldDaysAgo(storedSoldDate);
-    if (storedDaysAgo !== null && storedDaysAgo > GRADUATE_AFTER_DAYS) {
-      console.log(`  Sold ${storedDaysAgo} days ago (stored) — queued for graduation`);
-      graduateQueue.push({ rowIndex, rowValues });
-      continue;
-    }
-
-    // ── Scrape ──
-    let detail = null, zpid = storedZpid, isNewZpid = false;
     try {
-      ({ detail, zpid, isNewZpid } = await resolveDetail(address, storedZpid));
-      if (detail) console.log(`  Detail: ${detail.streetAddress || detail.addressStreet || address} — ${detail.homeStatus || detail.statusType}`);
-      else console.warn('  No detail found');
-    } catch (err) {
-      console.error(`  Detail error: ${err.message}`);
-    }
+      const zip = extractZip(address);
 
-    const fields = extractFields(detail);
-
-    // ── Post-scrape graduation check ──
-    const scrapedDaysAgo = soldDaysAgo(fields.soldDate);
-    if (scrapedDaysAgo !== null && scrapedDaysAgo > GRADUATE_AFTER_DAYS) {
-      console.log(`  Sold ${scrapedDaysAgo} days ago (scraped) — queued for graduation`);
-      // Build archive row with fresh scraped values merged over stored values.
-      const archiveRow = [...rowValues];
-      while (archiveRow.length <= COL.zpid) archiveRow.push('');
-      if (fields.listPrice    !== '') archiveRow[COL.listPrice]    = fields.listPrice;
-      if (fields.zillowUrl    !== '') archiveRow[COL.zillowUrl]    = fields.zillowUrl;
-      if (fields.listDate     !== '') archiveRow[COL.listDate]     = fields.listDate;
-      if (fields.soldPrice    !== '') archiveRow[COL.soldPrice]    = fields.soldPrice;
-      if (fields.soldDate     !== '') archiveRow[COL.soldDate]     = fields.soldDate;
-      if (fields.daysOnMarket !== '') archiveRow[COL.daysOnMarket] = fields.daysOnMarket;
-      if (zpid)                       archiveRow[COL.zpid]         = zpid;
-      graduateQueue.push({ rowIndex, rowValues: archiveRow });
-      continue;
-    }
-
-    // ── Normal update ──
-    let marketAvgDom = null;
-    let compCount    = null;
-    if (!fields.listPrice) {
-      console.warn(`  No list price — skipping market median DOM`);
-    } else if (zip && ZIP_SOLD_URLS[zip]) {
-      try {
-        const result = await fetchMarketMedianDom(zip, fields.listPrice);
-        if (result) ({ median: marketAvgDom, compCount } = result);
-        console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
-      } catch (err) {
-        console.error(`  Market DOM error: ${err.message}`);
+      // ── Fast-path graduation: already known sold > 90 days (skip scraping) ──
+      const storedDaysAgo = soldDaysAgo(storedSoldDate);
+      if (storedDaysAgo !== null && storedDaysAgo > GRADUATE_AFTER_DAYS) {
+        console.log(`  Sold ${storedDaysAgo} days ago (stored) — queued for graduation`);
+        graduateQueue.push({ rowIndex, rowValues });
+        continue;
       }
-    } else {
-      console.warn(`  No sold URL for ZIP ${zip}, skipping market DOM`);
-    }
 
-    const rowData = { ...fields, zpid: zpid || '', marketAvgDom, compCount };
+      // ── Scrape ──
+      let detail = null, zpid = storedZpid, isNewZpid = false;
+      try {
+        ({ detail, zpid, isNewZpid } = await resolveDetail(address, storedZpid));
+        if (detail) console.log(`  Detail: ${detail.streetAddress || detail.addressStreet || address} — ${detail.homeStatus || detail.statusType}`);
+        else console.warn('  No detail found');
+      } catch (err) {
+        console.error(`  Detail error: ${err.message}`);
+      }
 
-    try {
-      await updateSheetRow(sheets, rowIndex, rowData);
-      const zpidNote = isNewZpid ? ` (ZPID ${zpid} saved)` : '';
-      console.log(`  Sheet row ${rowIndex} updated${zpidNote}`);
+      const fields = extractFields(detail);
+
+      // ── Post-scrape graduation check ──
+      const scrapedDaysAgo = soldDaysAgo(fields.soldDate);
+      if (scrapedDaysAgo !== null && scrapedDaysAgo > GRADUATE_AFTER_DAYS) {
+        console.log(`  Sold ${scrapedDaysAgo} days ago (scraped) — queued for graduation`);
+        // Build archive row with fresh scraped values merged over stored values.
+        const archiveRow = [...rowValues];
+        while (archiveRow.length <= COL.zpid) archiveRow.push('');
+        if (fields.listPrice    !== '') archiveRow[COL.listPrice]    = fields.listPrice;
+        if (fields.zillowUrl    !== '') archiveRow[COL.zillowUrl]    = fields.zillowUrl;
+        if (fields.listDate     !== '') archiveRow[COL.listDate]     = fields.listDate;
+        if (fields.soldPrice    !== '') archiveRow[COL.soldPrice]    = fields.soldPrice;
+        if (fields.soldDate     !== '') archiveRow[COL.soldDate]     = fields.soldDate;
+        if (fields.daysOnMarket !== '') archiveRow[COL.daysOnMarket] = fields.daysOnMarket;
+        if (zpid)                       archiveRow[COL.zpid]         = zpid;
+        graduateQueue.push({ rowIndex, rowValues: archiveRow });
+        continue;
+      }
+
+      // ── Normal update ──
+      let marketAvgDom = null;
+      let compCount    = null;
+      if (!fields.listPrice) {
+        console.warn(`  No list price — skipping market median DOM`);
+      } else if (zip && ZIP_SOLD_URLS[zip]) {
+        try {
+          const result = await fetchMarketMedianDom(zip, fields.listPrice);
+          if (result) ({ median: marketAvgDom, compCount } = result);
+          console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
+        } catch (err) {
+          console.error(`  Market DOM error: ${err.message}`);
+        }
+      } else {
+        console.warn(`  No sold URL for ZIP ${zip}, skipping market DOM`);
+      }
+
+      const rowData = { ...fields, zpid: zpid || '', marketAvgDom, compCount };
+
+      try {
+        await updateSheetRow(sheets, rowIndex, rowData);
+        const zpidNote = isNewZpid ? ` (ZPID ${zpid} saved)` : '';
+        console.log(`  Sheet row ${rowIndex} updated${zpidNote}`);
+      } catch (err) {
+        console.error(`  Sheet write error: ${err.message}`);
+      }
     } catch (err) {
-      console.error(`  Sheet write error: ${err.message}`);
+      console.error(`  Skipping row ${rowIndex} after unhandled error: ${err.message}`);
     }
   }
 
