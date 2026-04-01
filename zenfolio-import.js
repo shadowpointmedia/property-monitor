@@ -14,7 +14,6 @@
  */
 
 const fetch  = require('node-fetch');
-const crypto = require('crypto');
 
 const ZENFOLIO_API   = 'https://api.zenfolio.com/api/1.8/zfapi.asmx';
 const ZENFOLIO_LOGIN = 'shadowpointmedia';
@@ -41,45 +40,6 @@ async function callApi(method, params, token) {
   const json = await res.json();
   if (json.error) throw new Error(`Zenfolio API error in ${method}: ${JSON.stringify(json.error)}`);
   return json.result;
-}
-
-// ─── Authentication ────────────────────────────────────────────────────────────
-//
-// Zenfolio uses a challenge-response scheme:
-//   1. GetChallenge → { PasswordSalt: int[], Challenge: int[] }
-//   2. innerHash = SHA256(saltBytes + passwordUtf8Bytes)
-//   3. passwordHash = SHA256(challengeBytes + innerHash)
-//   4. Authenticate(login, passwordHash, challenge) → token string
-
-async function authenticate() {
-  const password = process.env.ZENFOLIO_PASSWORD;
-  if (!password) throw new Error('ZENFOLIO_PASSWORD env var is not set');
-
-  console.error('Authenticating with Zenfolio...');
-  const challenge = await callApi('GetChallenge', []);
-
-  const saltBytes      = Buffer.from(challenge.PasswordSalt);
-  const challengeBytes = Buffer.from(challenge.Challenge);
-  const passwordBytes  = Buffer.from(password, 'utf8');
-
-  const innerHash = crypto.createHash('sha256')
-    .update(Buffer.concat([saltBytes, passwordBytes]))
-    .digest();
-
-  const passwordHash = Array.from(
-    crypto.createHash('sha256')
-      .update(Buffer.concat([challengeBytes, innerHash]))
-      .digest()
-  );
-
-  const token = await callApi('Authenticate', [
-    ZENFOLIO_LOGIN,
-    passwordHash,
-    Array.from(challengeBytes),
-  ]);
-
-  console.error('Authenticated successfully.');
-  return token;
 }
 
 // ─── Folder tree walk ─────────────────────────────────────────────────────────
@@ -141,10 +101,9 @@ function extractAddresses(root) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const token = await authenticate();
-
+  // LoadGroupHierarchy is publicly accessible for public accounts — no auth needed.
   console.error('Loading group hierarchy...');
-  const root = await callApi('LoadGroupHierarchy', [ZENFOLIO_LOGIN], token);
+  const root = await callApi('LoadGroupHierarchy', [ZENFOLIO_LOGIN]);
   console.error('Group hierarchy loaded.');
 
   const records = extractAddresses(root);
