@@ -383,7 +383,7 @@ async function archiveAndDeleteRow(sheets, trackerSheetId, rowIndex, rowValues) 
 async function readAddresses(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${SHEET_TAB}'!A:P`,  // read through P to include stored ZPIDs (col 15)
+    range: `'${SHEET_TAB}'!A:Q`,  // read through Q to include stored ZPIDs (col 15) and comp count (col 16)
   });
   const rows = res.data.values || [];
   const result = [];
@@ -413,7 +413,7 @@ async function updateSheetRow(sheets, rowIndex, data) {
     [COL.daysOnMarket, data.daysOnMarket ?? ''],
     [COL.zpid,         data.zpid         ?? ''],
     [COL.marketAvgDom, data.marketAvgDom ?? ''],
-    [12,               data.compCount    ?? ''],
+    [16,               data.compCount    ?? ''],
     [9, `=IF(AND(G${rowIndex}<>"",I${rowIndex}<>""),I${rowIndex}-G${rowIndex},"")`],
   ].map(([c, value]) => ({ range: `'${SHEET_TAB}'!${col(c)}${rowIndex}`, values: [[value]] }));
 
