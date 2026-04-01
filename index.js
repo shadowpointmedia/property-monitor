@@ -408,6 +408,7 @@ async function updateSheetRow(sheets, rowIndex, data) {
     [COL.daysOnMarket, data.daysOnMarket ?? ''],
     [COL.zpid,         data.zpid         ?? ''],
     [COL.marketAvgDom, data.marketAvgDom ?? ''],
+    [9, `=IF(AND(G${rowIndex}<>"",I${rowIndex}<>""),I${rowIndex}-G${rowIndex},"")`],
   ].map(([c, value]) => ({ range: `'${SHEET_TAB}'!${col(c)}${rowIndex}`, values: [[value]] }));
 
   await sheets.spreadsheets.values.batchUpdate({
