@@ -6,9 +6,11 @@ const { google } = require('googleapis');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const SHEET_ID       = process.env.GOOGLE_SHEET_ID;
-const SHEET_TAB      = 'Listing Tracker';
-const APIFY_TOKEN    = process.env.APIFY_TOKEN;
+const SHEET_ID            = process.env.GOOGLE_SHEET_ID;
+const SHEET_TAB           = 'Listing Tracker';
+const ARCHIVE_TAB         = 'Listing Archive';
+const GRADUATE_AFTER_DAYS = 90;
+const APIFY_TOKEN         = process.env.APIFY_TOKEN;
 
 // 0-based column indices  →  sheet letter
 // 0-based column indices matching "Listing Tracker" row 2 headers
@@ -293,6 +295,48 @@ async function fetchMarketAvgDom(zip) {
 
 // ─── Sheet read/write ─────────────────────────────────────────────────────────
 
+// Returns how many days ago a date string was, or null if unparseable.
+function soldDaysAgo(soldDateStr) {
+  if (!soldDateStr) return null;
+  const d = new Date(soldDateStr);
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// Returns the numeric sheetId for SHEET_TAB (needed for row deletion).
+async function getTrackerSheetId(sheets) {
+  const res = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const sheet = res.data.sheets.find(s => s.properties.title === SHEET_TAB);
+  if (!sheet) throw new Error(`Sheet tab "${SHEET_TAB}" not found`);
+  return sheet.properties.sheetId;
+}
+
+// Appends rowValues to ARCHIVE_TAB, then deletes the row from SHEET_TAB.
+// rowIndex is 1-based. trackerSheetId is the numeric sheetId.
+async function archiveAndDeleteRow(sheets, trackerSheetId, rowIndex, rowValues) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: `'${ARCHIVE_TAB}'!A1`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [rowValues] },
+  });
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: {
+      requests: [{
+        deleteDimension: {
+          range: {
+            sheetId: trackerSheetId,
+            dimension: 'ROWS',
+            startIndex: rowIndex - 1, // 0-based
+            endIndex: rowIndex,       // exclusive
+          },
+        },
+      }],
+    },
+  });
+}
+
 async function readAddresses(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -301,9 +345,16 @@ async function readAddresses(sheets) {
   const rows = res.data.values || [];
   const result = [];
   for (let i = 2; i < rows.length; i++) {
-    const addr = (rows[i][COL.address] || '').trim();
-    const zpid = (rows[i][COL.zpid]    || '').trim();
-    if (addr) result.push({ address: addr, zpid, rowIndex: i + 1 });
+    const addr = (rows[i][COL.address]  || '').trim();
+    const zpid = (rows[i][COL.zpid]     || '').trim();
+    if (addr) result.push({
+      address:        addr,
+      zpid,
+      rowIndex:       i + 1,
+      storedSoldDate: (rows[i][COL.soldDate]  || '').trim(),
+      storedListPrice:(rows[i][COL.listPrice] || '').trim(),
+      rowValues:      rows[i],
+    });
   }
   return result;
 }
@@ -344,10 +395,32 @@ async function runMonitor() {
   }
   console.log(`Found ${addressRows.length} addresses to process`);
 
-  for (const { address, zpid: storedZpid, rowIndex } of addressRows) {
+  // Needed for row deletion during graduation; fetch once up front.
+  let trackerSheetId;
+  try {
+    trackerSheetId = await getTrackerSheetId(sheets);
+  } catch (err) {
+    console.error('Failed to get tracker sheet ID:', err.message);
+    return;
+  }
+
+  // Rows that meet the graduation threshold are collected here and processed
+  // bottom-to-top after all updates, so row-index shifting doesn't affect writes.
+  const graduateQueue = []; // { rowIndex, rowValues }
+
+  for (const { address, zpid: storedZpid, rowIndex, storedSoldDate, rowValues } of addressRows) {
     console.log(`\nProcessing [row ${rowIndex}]: ${address}${storedZpid ? ` (ZPID ${storedZpid})` : ' (no ZPID yet)'}`);
     const zip = extractZip(address);
 
+    // ── Fast-path graduation: already known sold > 90 days (skip scraping) ──
+    const storedDaysAgo = soldDaysAgo(storedSoldDate);
+    if (storedDaysAgo !== null && storedDaysAgo > GRADUATE_AFTER_DAYS) {
+      console.log(`  Sold ${storedDaysAgo} days ago (stored) — queued for graduation`);
+      graduateQueue.push({ rowIndex, rowValues });
+      continue;
+    }
+
+    // ── Scrape ──
     let detail = null, zpid = storedZpid, isNewZpid = false;
     try {
       ({ detail, zpid, isNewZpid } = await resolveDetail(address, storedZpid));
@@ -357,6 +430,27 @@ async function runMonitor() {
       console.error(`  Detail error: ${err.message}`);
     }
 
+    const fields = extractFields(detail);
+
+    // ── Post-scrape graduation check ──
+    const scrapedDaysAgo = soldDaysAgo(fields.soldDate);
+    if (scrapedDaysAgo !== null && scrapedDaysAgo > GRADUATE_AFTER_DAYS) {
+      console.log(`  Sold ${scrapedDaysAgo} days ago (scraped) — queued for graduation`);
+      // Build archive row with fresh scraped values merged over stored values.
+      const archiveRow = [...rowValues];
+      while (archiveRow.length <= COL.zpid) archiveRow.push('');
+      if (fields.listPrice    !== '') archiveRow[COL.listPrice]    = fields.listPrice;
+      if (fields.zillowUrl    !== '') archiveRow[COL.zillowUrl]    = fields.zillowUrl;
+      if (fields.listDate     !== '') archiveRow[COL.listDate]     = fields.listDate;
+      if (fields.soldPrice    !== '') archiveRow[COL.soldPrice]    = fields.soldPrice;
+      if (fields.soldDate     !== '') archiveRow[COL.soldDate]     = fields.soldDate;
+      if (fields.daysOnMarket !== '') archiveRow[COL.daysOnMarket] = fields.daysOnMarket;
+      if (zpid)                       archiveRow[COL.zpid]         = zpid;
+      graduateQueue.push({ rowIndex, rowValues: archiveRow });
+      continue;
+    }
+
+    // ── Normal update ──
     let marketAvgDom = null;
     if (zip && ZIP_SOLD_URLS[zip]) {
       try {
@@ -369,7 +463,7 @@ async function runMonitor() {
       console.warn(`  No sold URL for ZIP ${zip}, skipping market DOM`);
     }
 
-    const rowData = { ...extractFields(detail), zpid: zpid || '', marketAvgDom };
+    const rowData = { ...fields, zpid: zpid || '', marketAvgDom };
 
     try {
       await updateSheetRow(sheets, rowIndex, rowData);
@@ -378,7 +472,20 @@ async function runMonitor() {
     } catch (err) {
       console.error(`  Sheet write error: ${err.message}`);
     }
+  }
 
+  // ── Graduate: archive then delete, bottom-to-top to preserve row indices ──
+  if (graduateQueue.length) {
+    console.log(`\nGraduating ${graduateQueue.length} row(s) to "${ARCHIVE_TAB}"...`);
+    graduateQueue.sort((a, b) => b.rowIndex - a.rowIndex);
+    for (const { rowIndex, rowValues: archiveRow } of graduateQueue) {
+      try {
+        await archiveAndDeleteRow(sheets, trackerSheetId, rowIndex, archiveRow);
+        console.log(`  Row ${rowIndex} archived and deleted`);
+      } catch (err) {
+        console.error(`  Graduate error (row ${rowIndex}): ${err.message}`);
+      }
+    }
   }
 
   console.log(`\n[${new Date().toISOString()}] Monitor run complete`);
