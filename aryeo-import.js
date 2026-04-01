@@ -97,24 +97,31 @@ function readOrders() {
 async function main() {
   const sheets = getSheetsClient();
 
-  // Get the numeric sheetId needed for clearRows.
+  // Get sheetId for resize operation.
   console.log('Fetching sheet metadata...');
   const meta      = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const sheetMeta = meta.data.sheets.find(s => s.properties.title === ARCHIVE_TAB);
   if (!sheetMeta) throw new Error(`Tab "${ARCHIVE_TAB}" not found`);
-  const sheetId = sheetMeta.properties.sheetId;
+  const sheetId     = sheetMeta.properties.sheetId;
+  const currentRows = sheetMeta.properties.gridProperties.rowCount;
 
-  // Clear all data rows (row 3 onward) — preserve rows 1 (legend) and 2 (headers).
-  console.log('Clearing existing data rows (row 3+)...');
+  // Ensure the sheet has enough rows, then clear data rows (3+).
+  const neededRows = Math.max(currentRows, 1000);
+  console.log(`Resizing sheet to ${neededRows} rows and clearing data rows (row 3+)...`);
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody: {
       requests: [{
-        deleteDimension: {
-          range: { sheetId, dimension: 'ROWS', startIndex: 2, endIndex: 10000 },
+        updateSheetProperties: {
+          properties: { sheetId, gridProperties: { rowCount: neededRows } },
+          fields: 'gridProperties.rowCount',
         },
       }],
     },
+  });
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SHEET_ID,
+    range: `'${ARCHIVE_TAB}'!A3:Z${neededRows}`,
   });
 
   // Read and deduplicate orders from xlsx.
