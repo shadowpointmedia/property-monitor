@@ -490,7 +490,9 @@ async function runMonitor() {
 
     // ── Normal update ──
     let marketAvgDom = null;
-    if (zip && ZIP_SOLD_URLS[zip]) {
+    if (!fields.listPrice) {
+      console.warn(`  No list price — skipping market median DOM`);
+    } else if (zip && ZIP_SOLD_URLS[zip]) {
       try {
         marketAvgDom = await fetchMarketMedianDom(zip, fields.listPrice);
         console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
