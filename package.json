@@ -9,7 +9,8 @@
   "dependencies": {
     "googleapis": "^144.0.0",
     "node-cron": "^3.0.3",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18.0.0"
