@@ -291,6 +291,25 @@ async function fetchMarketMedianDom(zip) {
     .map(Number)
     .sort((a, b) => a - b);
   if (!vals.length) return null;
+
+  // Extract price range from the searchQueryState in the ZIP URL
+  let priceRange = 'any';
+  const soldUrl = ZIP_SOLD_URLS[zip];
+  if (soldUrl) {
+    try {
+      const qs = soldUrl.slice(soldUrl.indexOf('searchQueryState=') + 'searchQueryState='.length);
+      const state = JSON.parse(decodeURIComponent(qs));
+      const { minPrice, maxPrice, mp, price } = state.filterState || {};
+      const lo = (mp?.min ?? price?.min ?? minPrice?.value ?? null);
+      const hi = (mp?.max ?? price?.max ?? maxPrice?.value ?? null);
+      priceRange = lo || hi
+        ? `$${lo ? lo.toLocaleString() : '0'}–${hi ? '$' + hi.toLocaleString() : 'any'}`
+        : 'any';
+    } catch (_) { /* leave priceRange as 'any' */ }
+  }
+
+  console.log(`  Comps for ZIP ${zip} (${priceRange}): ${vals.length} found, DOM min=${vals[0]} max=${vals[vals.length - 1]}`);
+
   const mid = Math.floor(vals.length / 2);
   return vals.length % 2 === 1
     ? vals[mid]
