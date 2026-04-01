@@ -282,6 +282,7 @@ function extractFields(detail) {
 
 // ─── Market average DOM ───────────────────────────────────────────────────────
 
+// Returns { median, compCount } or null if no usable comps.
 async function fetchMarketMedianDom(zip, listPrice) {
   const sold = await getZipListings(zip, 'sold');
   if (!sold?.length) return null;
@@ -298,17 +299,20 @@ async function fetchMarketMedianDom(zip, listPrice) {
 
   if (!comps.length) return null;
 
-  // Filter by price band relative to the subject's list price.
-  // Start at ±10%, widen to ±20% if fewer than 3 comps survive.
+  // Tiered price bands based on list price bracket.
+  // Each tier: [initialPct, widenPct]. Widen if fewer than 5 comps survive.
   let filtered = comps;
   let band = null;
   if (listPrice && !isNaN(Number(listPrice))) {
     const lp = Number(listPrice);
-    for (const pct of [0.10, 0.20]) {
+    const [initialPct, widenPct] = lp < 500_000   ? [0.10, 0.20]
+                                 : lp < 1_000_000  ? [0.15, 0.25]
+                                 :                   [0.20, 0.30];
+    for (const pct of [initialPct, widenPct]) {
       const lo = lp * (1 - pct);
       const hi = lp * (1 + pct);
       const candidates = comps.filter(c => c.price >= lo && c.price <= hi);
-      if (candidates.length >= 3 || pct === 0.20) {
+      if (candidates.length >= 5 || pct === widenPct) {
         filtered = candidates.length ? candidates : comps; // fall back to all if still empty
         band = { lo, hi, pct };
         break;
@@ -326,9 +330,10 @@ async function fetchMarketMedianDom(zip, listPrice) {
   console.log(`  Comps for ZIP ${zip} (${priceRange}): ${vals.length} found, DOM min=${vals[0]} max=${vals[vals.length - 1]}`);
 
   const mid = Math.floor(vals.length / 2);
-  return vals.length % 2 === 1
+  const median = vals.length % 2 === 1
     ? vals[mid]
     : Math.round((vals[mid - 1] + vals[mid]) / 2);
+  return { median, compCount: vals.length };
 }
 
 // ─── Sheet read/write ─────────────────────────────────────────────────────────
@@ -408,6 +413,7 @@ async function updateSheetRow(sheets, rowIndex, data) {
     [COL.daysOnMarket, data.daysOnMarket ?? ''],
     [COL.zpid,         data.zpid         ?? ''],
     [COL.marketAvgDom, data.marketAvgDom ?? ''],
+    [12,               data.compCount    ?? ''],
     [9, `=IF(AND(G${rowIndex}<>"",I${rowIndex}<>""),I${rowIndex}-G${rowIndex},"")`],
   ].map(([c, value]) => ({ range: `'${SHEET_TAB}'!${col(c)}${rowIndex}`, values: [[value]] }));
 
@@ -491,11 +497,13 @@ async function runMonitor() {
 
     // ── Normal update ──
     let marketAvgDom = null;
+    let compCount    = null;
     if (!fields.listPrice) {
       console.warn(`  No list price — skipping market median DOM`);
     } else if (zip && ZIP_SOLD_URLS[zip]) {
       try {
-        marketAvgDom = await fetchMarketMedianDom(zip, fields.listPrice);
+        const result = await fetchMarketMedianDom(zip, fields.listPrice);
+        if (result) ({ median: marketAvgDom, compCount } = result);
         console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
       } catch (err) {
         console.error(`  Market DOM error: ${err.message}`);
@@ -504,7 +512,7 @@ async function runMonitor() {
       console.warn(`  No sold URL for ZIP ${zip}, skipping market DOM`);
     }
 
-    const rowData = { ...fields, zpid: zpid || '', marketAvgDom };
+    const rowData = { ...fields, zpid: zpid || '', marketAvgDom, compCount };
 
     try {
       await updateSheetRow(sheets, rowIndex, rowData);
