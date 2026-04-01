@@ -282,15 +282,19 @@ function extractFields(detail) {
 
 // ─── Market average DOM ───────────────────────────────────────────────────────
 
-async function fetchMarketAvgDom(zip) {
+async function fetchMarketMedianDom(zip) {
   const sold = await getZipListings(zip, 'sold');
   if (!sold?.length) return null;
   const vals = sold
     .map(i => i.hdpData?.homeInfo?.daysOnZillow ?? null)
     .filter(v => v !== null && !isNaN(Number(v)))
-    .map(Number);
+    .map(Number)
+    .sort((a, b) => a - b);
   if (!vals.length) return null;
-  return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  const mid = Math.floor(vals.length / 2);
+  return vals.length % 2 === 1
+    ? vals[mid]
+    : Math.round((vals[mid - 1] + vals[mid]) / 2);
 }
 
 // ─── Sheet read/write ─────────────────────────────────────────────────────────
@@ -454,8 +458,8 @@ async function runMonitor() {
     let marketAvgDom = null;
     if (zip && ZIP_SOLD_URLS[zip]) {
       try {
-        marketAvgDom = await fetchMarketAvgDom(zip);
-        console.log(`  Market avg DOM (${zip}): ${marketAvgDom}`);
+        marketAvgDom = await fetchMarketMedianDom(zip);
+        console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
       } catch (err) {
         console.error(`  Market DOM error: ${err.message}`);
       }
