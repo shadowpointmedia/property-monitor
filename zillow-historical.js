@@ -189,16 +189,42 @@ async function writeArchiveRow(sheets, rowIndex, data) {
 
 // ─── Zillow lookup ────────────────────────────────────────────────────────────
 
-async function lookupZillow(address) {
-  // Build a Zillow search URL from the address for the detail scraper
+// Step 1: use zillow-scraper to search by address and get the ZPID
+async function findZpidByAddress(address) {
   const encoded = encodeURIComponent(address);
   const url     = `https://www.zillow.com/homes/${encoded}_rb/`;
+  const items   = await runApifyActor('maxcopell/zillow-scraper', {
+    searchUrls: [{ url }],
+    maxItems:   5,
+  });
+  if (!items?.length) return null;
 
+  // Match by street address
+  const street = address.split(',')[0].trim().toLowerCase();
+  const match  = items.find(i => {
+    const s = (i.addressStreet || i.address || '').toLowerCase();
+    return s.includes(street) || street.includes(s.split(',')[0].trim());
+  }) || items[0];
+
+  return match?.zpid ? String(match.zpid) : null;
+}
+
+// Step 2: use zillow-detail-scraper with the ZPID URL to get full price history
+async function fetchDetailByZpid(zpid) {
+  const url   = `https://www.zillow.com/homedetails/home/${zpid}_zpid/`;
   const items = await runApifyActor('maxcopell/zillow-detail-scraper', {
     startUrls: [{ url }],
     maxItems:  1,
   });
   return items?.[0] ?? null;
+}
+
+async function lookupZillow(address) {
+  const zpid = await findZpidByAddress(address);
+  if (!zpid) return null;
+  const detail = await fetchDetailByZpid(zpid);
+  if (detail) detail._zpid = zpid; // carry ZPID through
+  return detail;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -226,7 +252,7 @@ async function main() {
         continue;
       }
 
-      const zpid      = String(detail.zpid || detail.hdpData?.homeInfo?.zpid || '');
+      const zpid      = String(detail._zpid || detail.zpid || detail.hdpData?.homeInfo?.zpid || '');
       const zillowUrl = detail.hdpUrl
         ? `https://www.zillow.com${detail.hdpUrl}`
         : (detail.detailUrl ?? '');
