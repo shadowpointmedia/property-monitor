@@ -41,9 +41,9 @@ function getSheetsClient() {
 function parseAryeoDate(raw) {
   if (!raw) return '';
   const s = String(raw).trim();
-  // Try native Date parse after stripping timezone abbreviation
-  const cleaned = s.replace(/\s+[A-Z]{2,4}$/, '');
-  const d = new Date(cleaned);
+  // Strip time and timezone ("1:40pm MST") leaving just the date part
+  const dateOnly = s.replace(/,?\s+\d{1,2}:\d{2}[ap]m\s*\w*/i, '').trim();
+  const d = new Date(dateOnly);
   if (!isNaN(d.getTime())) {
     return d.toISOString().slice(0, 10);
   }
