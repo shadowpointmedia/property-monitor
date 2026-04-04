@@ -9,6 +9,8 @@ const { google } = require('googleapis');
 const SHEET_ID            = process.env.GOOGLE_SHEET_ID;
 const SHEET_TAB           = 'Listing Tracker';
 const ARCHIVE_TAB         = 'Listing Archive';
+const COMP_CACHE_TAB      = 'Comp Cache';
+const COMP_CACHE_TTL_MS   = 7 * 24 * 60 * 60 * 1000; // 7 days
 const GRADUATE_AFTER_DAYS = 90;
 const APIFY_TOKEN         = process.env.APIFY_TOKEN;
 
@@ -126,9 +128,83 @@ async function fetchDetailByZpid(zpid) {
   return item;
 }
 
-// ─── ZIP listing cache (address-search fallback) ──────────────────────────────
+// ─── ZIP listing cache (address-search fallback, per-run in-memory) ──────────
 
 const zipCache = {};
+
+// ─── Comp Cache (persistent across runs via Google Sheets) ───────────────────
+// Sheet columns: A=ZIP  B=Updated (ISO)  C=Comps JSON ([{dom,price},...])
+
+async function ensureCompCacheSheet(sheets) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const exists = meta.data.sheets.some(s => s.properties.title === COMP_CACHE_TAB);
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: COMP_CACHE_TAB } } }] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId:    SHEET_ID,
+      range:            `'${COMP_CACHE_TAB}'!A1:C1`,
+      valueInputOption: 'RAW',
+      requestBody:      { values: [['ZIP', 'Updated', 'Comps JSON']] },
+    });
+    console.log(`Created "${COMP_CACHE_TAB}" sheet`);
+  }
+}
+
+async function loadCompCache(sheets) {
+  const cache = new Map(); // zip → { updated: Date, comps: [{dom,price}], sheetRow: number }
+  try {
+    await ensureCompCacheSheet(sheets);
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `'${COMP_CACHE_TAB}'!A:C`,
+    });
+    const rows = res.data.values || [];
+    for (let i = 1; i < rows.length; i++) { // skip header row
+      const [zip, updatedStr, compsJson] = rows[i];
+      if (!zip) continue;
+      try {
+        const updated = new Date(updatedStr);
+        const comps   = JSON.parse(compsJson || '[]');
+        cache.set(String(zip).trim(), { updated, comps, sheetRow: i + 1 });
+      } catch { /* skip malformed rows */ }
+    }
+    console.log(`Comp cache loaded: ${cache.size} ZIP(s) cached`);
+  } catch (err) {
+    console.warn(`Comp cache load failed (will fetch fresh): ${err.message}`);
+  }
+  return cache;
+}
+
+async function saveCompCacheEntry(sheets, zip, comps, cache) {
+  const now     = new Date().toISOString();
+  const entry   = cache.get(zip);
+  const rowData = [[zip, now, JSON.stringify(comps)]];
+
+  if (entry?.sheetRow) {
+    // Overwrite existing row
+    await sheets.spreadsheets.values.update({
+      spreadsheetId:     SHEET_ID,
+      range:             `'${COMP_CACHE_TAB}'!A${entry.sheetRow}:C${entry.sheetRow}`,
+      valueInputOption:  'RAW',
+      requestBody:       { values: rowData },
+    });
+  } else {
+    // Append new row
+    await sheets.spreadsheets.values.append({
+      spreadsheetId:    SHEET_ID,
+      range:            `'${COMP_CACHE_TAB}'!A:C`,
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody:      { values: rowData },
+    });
+  }
+  // Update in-memory cache (sheetRow unknown for appended rows — will be resolved on next load)
+  cache.set(zip, { updated: new Date(now), comps, sheetRow: entry?.sheetRow ?? null });
+  console.log(`  Comp cache updated for ZIP ${zip}`);
+}
 
 function buildActiveUrl(soldUrl) {
   const qIdx = soldUrl.indexOf('searchQueryState=');
@@ -283,19 +359,38 @@ function extractFields(detail) {
 // ─── Market average DOM ───────────────────────────────────────────────────────
 
 // Returns { median, compCount } or null if no usable comps.
-async function fetchMarketMedianDom(zip, listPrice) {
-  const sold = await getZipListings(zip, 'sold');
-  if (!sold?.length) return null;
+// compCache: Map loaded by loadCompCache(); sheets: Sheets client for cache writes.
+async function fetchMarketMedianDom(zip, listPrice, compCache, sheets) {
+  let comps;
 
-  // Each comp needs both a DOM value and a price for filtering.
-  const comps = sold.map(i => {
-    const info  = i.hdpData?.homeInfo || {};
-    const dom   = info.daysOnZillow ?? null;
-    const price = info.price ?? i.unformattedPrice ?? null;
-    return (dom !== null && !isNaN(Number(dom)) && price !== null && !isNaN(Number(price)))
-      ? { dom: Number(dom), price: Number(price) }
-      : null;
-  }).filter(Boolean);
+  const cached = compCache?.get(zip);
+  const isFresh = cached && (Date.now() - cached.updated.getTime()) < COMP_CACHE_TTL_MS;
+
+  if (isFresh) {
+    console.log(`  Using cached comps for ZIP ${zip} (age: ${Math.round((Date.now() - cached.updated.getTime()) / 86400000)}d)`);
+    comps = cached.comps;
+  } else {
+    const sold = await getZipListings(zip, 'sold');
+    if (!sold?.length) return null;
+
+    // Extract {dom, price} pairs from raw Apify results and persist to cache.
+    comps = sold.map(i => {
+      const info  = i.hdpData?.homeInfo || {};
+      const dom   = info.daysOnZillow ?? null;
+      const price = info.price ?? i.unformattedPrice ?? null;
+      return (dom !== null && !isNaN(Number(dom)) && price !== null && !isNaN(Number(price)))
+        ? { dom: Number(dom), price: Number(price) }
+        : null;
+    }).filter(Boolean);
+
+    if (compCache && sheets) {
+      try {
+        await saveCompCacheEntry(sheets, zip, comps, compCache);
+      } catch (err) {
+        console.warn(`  Failed to save comp cache for ZIP ${zip}: ${err.message}`);
+      }
+    }
+  }
 
   if (!comps.length) return null;
 
@@ -440,6 +535,9 @@ async function runMonitor() {
   }
   console.log(`Found ${addressRows.length} addresses to process`);
 
+  // Load persistent comp cache from "Comp Cache" sheet.
+  const compCache = await loadCompCache(sheets);
+
   // Needed for row deletion during graduation; fetch once up front.
   let trackerSheetId;
   try {
@@ -503,7 +601,7 @@ async function runMonitor() {
         console.warn(`  No list price — skipping market median DOM`);
       } else if (zip && ZIP_SOLD_URLS[zip]) {
         try {
-          const result = await fetchMarketMedianDom(zip, fields.listPrice);
+          const result = await fetchMarketMedianDom(zip, fields.listPrice, compCache, sheets);
           if (result) ({ median: marketAvgDom, compCount } = result);
           console.log(`  Market median DOM (${zip}): ${marketAvgDom}`);
         } catch (err) {
