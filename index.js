@@ -81,10 +81,16 @@ const APIFY_BASE = 'https://api.apify.com/v2';
 const APIFY_POLL_MS = 6_000;
 const APIFY_MAX_WAIT_MS = 300_000; // 5 minutes per actor run
 
-async function runApifyActor(actorId, input) {
+// NOTE: maxcopell/zillow-scraper uses PAGINATION_WITH_ZOOM_IN by default, which ignores
+// the actor-level maxItems field and scrapes all listings in the area. We cannot prevent
+// the actor from collecting excess results, but we hard-cap what we read from the dataset
+// via the `fetchLimit` param. Apify bills per item scraped (not per item read), so the
+// comp cache (7-day TTL per ZIP) is the primary cost control — it limits each ZIP to one
+// Apify call per week regardless of how many properties share that ZIP.
+async function runApifyActor(actorId, input, fetchLimit = 150) {
   const safeId = actorId.replace('/', '~');
   const startRes = await fetch(
-    `${APIFY_BASE}/acts/${safeId}/runs?token=${APIFY_TOKEN}&memory=512`,
+    `${APIFY_BASE}/acts/${safeId}/runs?token=${APIFY_TOKEN}&memory=2048`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }
   );
   if (!startRes.ok) {
@@ -105,7 +111,7 @@ async function runApifyActor(actorId, input) {
   if (status !== 'SUCCEEDED') throw new Error(`Actor ${actorId} run ${runId}: ${status}`);
 
   const itemsRes = await fetch(
-    `${APIFY_BASE}/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&limit=200`
+    `${APIFY_BASE}/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}&limit=${fetchLimit}`
   );
   if (!itemsRes.ok) throw new Error(`Failed to fetch dataset for run ${runId}`);
   return itemsRes.json();
@@ -119,7 +125,7 @@ async function fetchDetailByZpid(zpid) {
   const items = await runApifyActor('maxcopell/zillow-detail-scraper', {
     startUrls: [{ url }],
     maxItems: 1,
-  });
+  }, 1);
   const item = items?.[0];
   if (!item || item.isValid === false) {
     console.warn(`  Detail scraper returned invalid result for ZPID ${zpid}`);
@@ -230,8 +236,8 @@ async function getZipListings(zip, type) {
   console.log(`  Fetching ${type} listings for ZIP ${zip}`);
   const items = await runApifyActor('maxcopell/zillow-scraper', {
     searchUrls: [{ url }],
-    maxItems: 100,
-  });
+    maxItems: 150,
+  }, 150);
   zipCache[zip][type] = items || [];
   return zipCache[zip][type];
 }
